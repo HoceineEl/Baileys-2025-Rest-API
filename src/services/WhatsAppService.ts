@@ -6,17 +6,19 @@ import makeWASocket, {
   makeCacheableSignalKeyStore,
   AnyMessageContent,
   WASocket,
+  WAVersion,
   BaileysEventMap,
   ConnectionState
 } from '../index';
 import { Boom } from '@hapi/boom';
 import QRCode from 'qrcode';
+import axios from 'axios';
 import { join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
-import { logger, whatsappLogger } from '../utils/apiLogger';
+import { logger, whatsappLogger } from '../Utils/apiLogger';
 import { DatabaseService } from './DatabaseService';
 import { WebhookService } from './WebhookService';
-import { WhatsAppSession, SessionStatus } from '../types/api';
+import { WhatsAppSession, SessionStatus } from '../Types/api';
 
 export class WhatsAppService {
   private sessions: Map<string, WhatsAppSession> = new Map();
@@ -71,7 +73,7 @@ export class WhatsAppService {
     try {
       const authDir = join(process.cwd(), 'auth_sessions', sessionId);
       const { state, saveCreds } = await useMultiFileAuthState(authDir);
-      const { version } = await fetchLatestBaileysVersion();
+      const version = await this.getLatestWhatsAppVersion();
 
       const socket = makeWASocket({
         version,
@@ -380,6 +382,25 @@ export class WhatsAppService {
         whatsappLogger.error(`Failed to handle group upsert for ${sessionId}:`, error);
       }
     }
+  }
+
+  private async getLatestWhatsAppVersion(): Promise<WAVersion> {
+    try {
+      // Fetch directly from web.whatsapp.com for the most up-to-date version
+      const { data } = await axios.get('https://web.whatsapp.com/sw.js', { responseType: 'text', timeout: 5000 });
+      const match = data.match(/\"client_revision\":\s*(\d+)/);
+      if (match?.[1]) {
+        whatsappLogger.info(`Fetched WhatsApp version from web: [2, 3000, ${match[1]}]`);
+        return [2, 3000, +match[1]] as WAVersion;
+      }
+    } catch (error) {
+      whatsappLogger.warn('Failed to fetch version from web.whatsapp.com, trying GitHub...');
+    }
+
+    // Fallback to GitHub
+    const { version } = await fetchLatestBaileysVersion();
+    whatsappLogger.info(`Using Baileys version: ${version.join('.')}`);
+    return version;
   }
 
   private getMessageType(message: any): string {
